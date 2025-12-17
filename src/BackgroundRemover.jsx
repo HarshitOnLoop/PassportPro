@@ -44,14 +44,7 @@ const BackgroundRemover = () => {
     setIsLoading(true);
     setLoadingMsg("Removing Background... (AI Processing)");
     try {
-const config = {
-  publicPath: "https://static.img.ly/background-removal-data/1.0.0/", // Fetch models from fast CDN
-  debug: true, // Lets you see download progress in console
-  device: 'gpu', // Forces GPU usage if available
-  proxyToWorker: true, // Offloads work to a web worker to stop UI freezing
-};
-
-const blob = await removeBackground(imageSrc, config);
+const blob = await removeBackground(imageSrc);
       const url = URL.createObjectURL(blob);
       setProcessedImage(url);
       setStep(2);
