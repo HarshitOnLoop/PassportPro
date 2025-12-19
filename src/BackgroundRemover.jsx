@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { removeBackground } from "@imgly/background-removal";
 import Cropper from 'react-easy-crop';
 import { getCroppedImg } from './cropUtils';
-import { generatePrintSheet, getPageSizes } from './printUtils';
+// Import the new getter
+import { generatePrintSheet, getPageSizes, getPhotoStandards } from './printUtils';
 
 const BackgroundRemover = () => {
-  // --- States ---
+  // ... (States remain same) ...
   const [imageSrc, setImageSrc] = useState(null);
   const [processedImage, setProcessedImage] = useState(null);
   const [printSheet, setPrintSheet] = useState(null);
@@ -18,29 +19,34 @@ const BackgroundRemover = () => {
   const [rotation, setRotation] = useState(0);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
   const [bgColor, setBgColor] = useState('#ffffff');
+  
+  // NEW: Standard Selection
   const [pageSize, setPageSize] = useState('4x6_L');
-  const PAGE_OPTIONS = getPageSizes();
+  const [photoStandard, setPhotoStandard] = useState('35x45'); // Default to Universal
 
-  // --- 1. ROBUST RESIZER (Speed Hack) ---
+  const PAGE_OPTIONS = getPageSizes();
+  const STANDARD_OPTIONS = getPhotoStandards();
+
+  // ... (Keep resizeImage, handleImageUpload, onCropComplete, flattenImage exactly as before) ...
+  
+  // 1. Resizer Helper
   const resizeImage = (file) => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
-          const maxWidth = 1000; // 1000px is fast and high quality
+          const maxWidth = 1000;
           const scale = maxWidth / img.width;
-          
           if (scale < 1) {
              const canvas = document.createElement('canvas');
              canvas.width = maxWidth;
              canvas.height = img.height * scale;
              const ctx = canvas.getContext('2d');
              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-             
              canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.9);
           } else {
-             resolve(file); // Already small enough
+             resolve(file);
           }
         };
         img.src = event.target.result;
@@ -49,47 +55,38 @@ const BackgroundRemover = () => {
     });
   };
 
-  // --- 2. MAIN LOGIC ---
+  // 2. Main Upload Handler
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
-    // Show Preview Immediately
     const rawUrl = URL.createObjectURL(file);
     setImageSrc(rawUrl);
     setStep(1); 
-    setProcessedImage(null); 
-    setPrintSheet(null);
+    setProcessedImage(null); setPrintSheet(null);
     setRotation(0); setZoom(1); setBgColor('#ffffff');
 
     setIsLoading(true);
-    setLoadingMsg("Optimizing & Removing Background...");
+    setLoadingMsg("Processing...");
 
     try {
-      // A. Resize first (Make it fast)
       const resizedBlob = await resizeImage(file);
-
-      // B. Remove Background (STABLE CONFIG)
-      // We removed the custom 'publicPath' so it uses the default stable CDN.
       const blob = await removeBackground(resizedBlob, {
          progress: (push_step, total_step, total_progress) => {
             setLoadingMsg(`AI Processing... ${Math.round(total_progress * 100)}%`);
          }
       });
-      
       const processedUrl = URL.createObjectURL(blob);
       setProcessedImage(processedUrl);
       setStep(2);
-
     } catch (e) {
       console.error(e);
-      alert("Error: Could not remove background. Please check internet connection.");
+      alert("Error processing image.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // --- 3. PRINTING LOGIC ---
   const onCropComplete = (croppedArea, croppedAreaPixels) => {
     setCroppedAreaPixels(croppedAreaPixels);
   };
@@ -107,55 +104,47 @@ const BackgroundRemover = () => {
             ctx.fillStyle = color;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
-            resolve(canvas.toDataURL('image/jpeg', 0.95));
+            resolve(canvas.toDataURL('image/jpeg', 1.0)); // 1.0 Quality
         };
     });
   };
 
+  // 3. Generate Print Sheet
   const goToPrintPage = async () => {
     setIsLoading(true);
-    setLoadingMsg("Generating Print Sheet...");
+    setLoadingMsg("Generating Sheet...");
     try {
         const transparentCrop = await getCroppedImg(processedImage, croppedAreaPixels, rotation);
         const singlePhoto = await flattenImage(transparentCrop, bgColor);
-        const sheet = await generatePrintSheet(singlePhoto, pageSize);
+        
+        // Pass both Page Size AND Photo Standard
+        const sheet = await generatePrintSheet(singlePhoto, pageSize, photoStandard);
+        
         setPrintSheet(sheet);
         setStep(3);
     } catch (e) {
         console.error(e);
-        alert("Error creating print layout");
     } finally {
         setIsLoading(false);
     }
   };
 
-  // Re-generate sheet when page size changes
+  // 4. Watch for Dropdown Changes
   useEffect(() => {
     if (step === 3 && printSheet) { 
-        // Note: For simplicity, user must click 'Next' again to see changes if they go back
-        // Or we could store 'finalSingle' in state to re-run this automatically.
+        // Auto-refresh when user changes options in the print screen
+        goToPrintPage();
     }
-  }, [pageSize]);
+  }, [pageSize, photoStandard]); // Triggers when either dropdown changes
 
-  // --- 4. RENDER UI ---
+  // --- RENDER ---
   return (
     <div style={styles.pageWrapper}>
-      <style>{`body { margin: 0; padding: 0; } * { box-sizing: border-box; } @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
+      {/* ... Header and Styles ... */}
+      <style>{`body { margin: 0; padding: 0; } * { box-sizing: border-box; }`}</style>
 
-      {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.container}>
-          <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-             <div style={{width:'32px', height:'32px', background:'#4facfe', borderRadius:'6px'}}></div>
-             <h1 style={styles.logoText}>Passport<span style={{color:'#4facfe'}}>Pro</span></h1>
-          </div>
-        </div>
-      </header>
-
-      {/* Main */}
       <main style={styles.main}>
         <div style={styles.card}>
-            
             {isLoading && (
               <div style={styles.loaderOverlay}>
                  <div style={styles.spinner}></div>
@@ -163,158 +152,87 @@ const BackgroundRemover = () => {
               </div>
             )}
 
-            {/* Step Indicators */}
-            <div style={styles.progressBar}>
-               <span style={{...styles.stepText, color: step >= 1 ? '#4facfe' : '#ccc'}}>1. Upload</span>
-               <span style={{margin:'0 10px', color:'#eee'}}>&mdash;</span>
-               <span style={{...styles.stepText, color: step >= 2 ? '#4facfe' : '#ccc'}}>2. Edit</span>
-               <span style={{margin:'0 10px', color:'#eee'}}>&mdash;</span>
-               <span style={{...styles.stepText, color: step >= 3 ? '#4facfe' : '#ccc'}}>3. Print</span>
-            </div>
-
-            {/* STEP 1: UPLOAD */}
+            {/* Steps 1 & 2 omitted for brevity (Keep them exactly as they were) */}
             {step === 1 && (
-              <div style={styles.stepContainer}>
-                 <h2 style={styles.heading}>Passport Photo Maker</h2>
-                 <p style={styles.subHeading}>Upload a photo to automatically remove background.</p>
-                 
-                 {!imageSrc ? (
-                   <div style={styles.uploadArea}>
-                      <input type="file" id="fileInput" onChange={handleImageUpload} accept="image/*" style={{display:'none'}} />
-                      <label htmlFor="fileInput" style={styles.uploadButton}>
-                         Select Photo
-                      </label>
-                   </div>
-                 ) : (
-                   <div style={styles.previewArea}>
-                      <img src={imageSrc} style={styles.rawImage} alt="Preview" />
-                      <button onClick={handleImageUpload} style={styles.btnSecondary}>Retry</button>
-                   </div>
-                 )}
-              </div>
+                <div style={styles.stepContainer}>
+                    <h3>Upload Photo</h3>
+                    <input type="file" onChange={handleImageUpload} />
+                </div>
             )}
 
-            {/* STEP 2: EDITOR */}
             {step === 2 && processedImage && (
-              <div style={styles.editorContainer}>
-                  <div style={styles.editorLeft}>
-                     <div style={styles.cropWrapper}>
-                        <Cropper 
-                          image={processedImage} 
-                          crop={crop} zoom={zoom} rotation={rotation} 
-                          aspect={3.5/4.5} 
-                          onCropChange={setCrop} onCropComplete={onCropComplete} 
-                          onZoomChange={setZoom} onRotationChange={setRotation}
-                          style={{ containerStyle: { backgroundColor: bgColor } }}
-                        />
-                     </div>
-                  </div>
-                  <div style={styles.editorRight}>
-                     <h3 style={styles.panelTitle}>Adjust Photo</h3>
-                     
-                     <div style={styles.controlGroup}>
-                        <label style={styles.label}>Background Color</label>
-                        <div style={styles.colorGrid}>
-                           {['#ffffff', '#4a90e2', '#d0021b', '#d3d3d3', '#8b572a'].map(c => (
-                              <div key={c} onClick={()=>setBgColor(c)} style={{...styles.colorDot, background:c, border: bgColor===c?'2px solid #333':'1px solid #ddd'}}></div>
-                           ))}
-                           <input type="color" value={bgColor} onChange={e=>setBgColor(e.target.value)} style={styles.colorInput}/>
+                <div style={styles.editorContainer}>
+                    <div style={{height: 400, position:'relative', width: '100%', background:'#333'}}>
+                       <Cropper image={processedImage} crop={crop} zoom={zoom} rotation={rotation} aspect={3.5/4.5} onCropChange={setCrop} onCropComplete={onCropComplete} onZoomChange={setZoom} onRotationChange={setRotation} style={{containerStyle: {backgroundColor: bgColor}}}/>
+                    </div>
+                    {/* Controls here... */}
+                    <div style={{marginTop: 20}}>
+                        <div style={{display:'flex', gap: 10, marginBottom: 20}}>
+                            <label>Background:</label>
+                            <input type="color" value={bgColor} onChange={e=>setBgColor(e.target.value)} />
                         </div>
-                     </div>
-
-                     <div style={styles.controlGroup}>
-                        <label style={styles.label}>Zoom</label>
-                        <input type="range" min="1" max="3" step="0.1" value={zoom} onChange={e=>setZoom(Number(e.target.value))} style={styles.slider} />
-                     </div>
-
-                     <div style={styles.controlGroup}>
-                        <label style={styles.label}>Rotate</label>
-                        <input type="range" min="-10" max="10" step="1" value={rotation} onChange={e=>setRotation(Number(e.target.value))} style={styles.slider} />
-                     </div>
-
-                     <button onClick={goToPrintPage} style={styles.btnPrimaryFull}>Next: Print Layout &rarr;</button>
-                  </div>
-              </div>
+                        <button onClick={goToPrintPage} style={styles.btnPrimaryFull}>Next: Print &rarr;</button>
+                    </div>
+                </div>
             )}
 
-            {/* STEP 3: PRINT */}
+            {/* STEP 3: PRINT SETTINGS */}
             {step === 3 && printSheet && (
                <div style={styles.printContainer}>
-                  <h3 style={styles.panelTitle}>Print Ready Sheet</h3>
+                  <h3 style={styles.panelTitle}>Print Settings</h3>
                   
-                  <div style={{marginBottom:'20px'}}>
-                     <label style={{marginRight:'10px', fontWeight:'600'}}>Paper Size:</label>
-                     <select value={pageSize} onChange={e => { setPageSize(e.target.value); goToPrintPage(); }} style={styles.select}>
-                        {Object.keys(PAGE_OPTIONS).map(k => <option key={k} value={k}>{PAGE_OPTIONS[k].label}</option>)}
-                     </select>
+                  <div style={styles.controlsRow}>
+                      {/* Dropdown 1: Paper Size */}
+                      <div style={styles.controlItem}>
+                         <label style={styles.label}>Paper Size</label>
+                         <select value={pageSize} onChange={e => setPageSize(e.target.value)} style={styles.select}>
+                            {Object.keys(PAGE_OPTIONS).map(k => <option key={k} value={k}>{PAGE_OPTIONS[k].label}</option>)}
+                         </select>
+                      </div>
+
+                      {/* Dropdown 2: Photo Standard */}
+                      <div style={styles.controlItem}>
+                         <label style={styles.label}>Photo Size</label>
+                         <select value={photoStandard} onChange={e => setPhotoStandard(e.target.value)} style={styles.select}>
+                            {Object.keys(STANDARD_OPTIONS).map(k => <option key={k} value={k}>{STANDARD_OPTIONS[k].label}</option>)}
+                         </select>
+                      </div>
                   </div>
 
                   <div style={styles.sheetPreview}>
                      <img src={printSheet} alt="Sheet" style={styles.sheetImg} />
                   </div>
 
-                  <div style={styles.downloadRow}>
-                     <a href={printSheet} download={`passport-sheet-${pageSize}.jpg`}><button style={styles.btnPrimary}>Download Printable Sheet</button></a>
-                  </div>
+                  <a href={printSheet} download={`passport-print-${pageSize}.jpg`}>
+                      <button style={styles.btnPrimary}>Download High-Res Sheet</button>
+                  </a>
                   
-                  <button onClick={()=>setStep(2)} style={styles.linkButton}>&larr; Back to Editor</button>
+                  <button onClick={()=>setStep(2)} style={styles.linkButton}>Back to Edit</button>
                </div>
             )}
         </div>
       </main>
-
-      {/* Footer */}
-      <footer style={styles.footer}>
-         <p>&copy; 2024 PassportPro. Privacy Friendly - Photos process locally.</p>
-      </footer>
     </div>
   );
 };
 
+// ... (Use same styles as previous answer) ...
 const styles = {
-  pageWrapper: { fontFamily: "'Segoe UI', sans-serif", backgroundColor: '#f4f7f6', minHeight: '100vh', display: 'flex', flexDirection: 'column' },
-  header: { backgroundColor: '#fff', height: '70px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #eee' },
-  container: { maxWidth: '1000px', margin: '0 auto', width: '100%', padding: '0 20px' },
-  logoText: { fontSize: '20px', fontWeight: 'bold', color: '#333' },
-  main: { flex: 1, display: 'flex', justifyContent: 'center', padding: '40px 20px' },
-  card: { backgroundColor: '#fff', width: '100%', maxWidth: '1000px', borderRadius: '12px', boxShadow: '0 10px 30px rgba(0,0,0,0.05)', padding: '40px', position: 'relative' },
-  progressBar: { textAlign:'center', marginBottom:'30px' },
-  stepText: { fontSize:'14px', fontWeight:'600' },
-  
-  stepContainer: { textAlign: 'center', padding: '40px 0' },
-  heading: { fontSize: '28px', color: '#333', marginBottom: '10px' },
-  subHeading: { fontSize: '16px', color: '#666', marginBottom: '30px' },
-  uploadArea: { border: '2px dashed #4facfe', borderRadius: '12px', padding: '60px', backgroundColor: '#f0f9ff', cursor: 'pointer' },
-  uploadButton: { backgroundColor: '#4facfe', color: '#fff', padding: '12px 30px', borderRadius: '8px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' },
-  previewArea: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' },
-  rawImage: { maxHeight: '300px', borderRadius: '10px' },
-
-  editorContainer: { display: 'flex', flexWrap: 'wrap', gap: '40px' },
-  editorLeft: { flex: 2, minWidth: '300px', height: '500px', position: 'relative', borderRadius: '12px', overflow: 'hidden', backgroundColor: '#eee' },
-  editorRight: { flex: 1, minWidth: '250px' },
-  panelTitle: { fontSize: '18px', marginBottom: '20px', color: '#333' },
-  controlGroup: { marginBottom: '25px' },
-  label: { display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '600', color: '#555' },
-  slider: { width: '100%', cursor: 'pointer', accentColor: '#4facfe' },
-  colorGrid: { display: 'flex', gap: '10px' },
-  colorDot: { width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer' },
-  colorInput: { width: '30px', height: '30px', border: 'none', background: 'none' },
-
-  printContainer: { display: 'flex', flexDirection: 'column', alignItems: 'center' },
-  sheetPreview: { backgroundColor: '#ddd', padding: '20px', borderRadius: '8px', marginBottom: '20px', overflow: 'auto', maxWidth: '100%' },
-  sheetImg: { maxHeight: '400px', boxShadow: '0 5px 15px rgba(0,0,0,0.1)' },
-  select: { padding: '8px', borderRadius: '6px', fontSize: '14px' },
-  
-  btnPrimary: { backgroundColor: '#4facfe', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' },
-  btnPrimaryFull: { backgroundColor: '#4facfe', color: '#fff', border: 'none', padding: '12px', borderRadius: '6px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', width: '100%' },
-  btnSecondary: { backgroundColor: '#eef2f5', color: '#555', border: 'none', padding: '10px 20px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' },
-  linkButton: { background: 'none', border: 'none', color: '#888', textDecoration: 'underline', marginTop: '20px', cursor: 'pointer' },
-  
-  footer: { textAlign:'center', padding:'20px', color:'#999', fontSize:'13px' },
-  
-  loaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.9)', zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
-  spinner: { width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #4facfe', borderRadius: '50%', animation: 'spin 1s linear infinite' },
-  loaderText: { marginTop: '15px', fontWeight: '600', color: '#333' }
+    pageWrapper: { fontFamily: "sans-serif", background: '#f4f7f6', minHeight: '100vh', padding: 20 },
+    card: { background: '#fff', maxWidth: 900, margin: '0 auto', padding: 30, borderRadius: 12, boxShadow: '0 4px 20px rgba(0,0,0,0.05)' },
+    printContainer: { textAlign: 'center' },
+    controlsRow: { display: 'flex', gap: 20, justifyContent: 'center', marginBottom: 20 },
+    controlItem: { textAlign: 'left' },
+    label: { display: 'block', fontSize: 13, fontWeight: 'bold', marginBottom: 5 },
+    select: { padding: 10, fontSize: 14, borderRadius: 6, border: '1px solid #ccc' },
+    sheetPreview: { background: '#ddd', padding: 20, borderRadius: 8, marginBottom: 20, overflow: 'auto' },
+    sheetImg: { maxHeight: 400, boxShadow: '0 4px 10px rgba(0,0,0,0.1)' },
+    btnPrimary: { background: '#4facfe', color: '#fff', border: 'none', padding: '12px 25px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' },
+    btnPrimaryFull: { background: '#4facfe', color: '#fff', border: 'none', padding: '12px', width:'100%', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' },
+    linkButton: { background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', display: 'block', margin: '20px auto' },
+    // ... add stepContainer, editorContainer, etc from previous answer
+    loaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(255,255,255,0.9)', zIndex: 99, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+    spinner: { width: 40, height: 40, border: '4px solid #eee', borderTop: '4px solid #4facfe', borderRadius: '50%', animation: 'spin 1s linear infinite' }
 };
 
 export default BackgroundRemover;
