@@ -1,5 +1,3 @@
-// src/cropUtils.js
-
 const getRadianAngle = (degreeValue) => {
   return (degreeValue * Math.PI) / 180;
 };
@@ -23,8 +21,7 @@ function rotateSize(width, height, rotation) {
   };
 }
 
-// Default background is now null (Transparent)
-export const getCroppedImg = async (imageSrc, pixelCrop, rotation = 0, backgroundColor = null) => {
+export const getCroppedImg = async (imageSrc, pixelCrop, rotation = 0) => {
   const image = await createImage(imageSrc);
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -39,12 +36,6 @@ export const getCroppedImg = async (imageSrc, pixelCrop, rotation = 0, backgroun
 
   canvas.width = bBoxWidth;
   canvas.height = bBoxHeight;
-
-  // Draw Background (Only if specified, otherwise transparent)
-  if (backgroundColor) {
-      ctx.fillStyle = backgroundColor;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }
 
   ctx.translate(bBoxWidth / 2, bBoxHeight / 2);
   ctx.rotate(rotRad);
@@ -64,9 +55,9 @@ export const getCroppedImg = async (imageSrc, pixelCrop, rotation = 0, backgroun
   ctx.putImageData(data, 0, 0);
 
   return new Promise((resolve) => {
-    // FIX: Always return PNG to preserve transparency for the preview stage
+    // Return transparent PNG
     canvas.toBlob((blob) => {
       resolve(URL.createObjectURL(blob));
-    }, 'image/png'); 
+    }, 'image/png');
   });
 };
