@@ -24,32 +24,30 @@ const BackgroundRemover = () => {
   const [pageSize, setPageSize] = useState('4x6_L'); 
   const PAGE_OPTIONS = getPageSizes();
 
-  // --- OPTIMIZATION 1: Preload AI Models on Mount ---
+  // --- 1. PRELOAD (Safe Mode) ---
   useEffect(() => {
+    // We try to preload, but we don't crash if it fails
     try {
-      const config = {
+      preload({
         publicPath: "https://static.img.ly/background-removal-data/1.0.6/",
-        model: 'small', // Use the fast model
-      };
-      preload(config);
+        model: 'small', 
+      });
       console.log("AI Models Preloading...");
     } catch (e) {
-      console.error("Preload error:", e);
+      console.warn("Preload warning (non-critical):", e);
     }
   }, []);
 
-  // --- OPTIMIZATION 2: The Image Resizer ---
-  // Shrinks huge images to ~1000px. This makes AI 10x faster.
+  // --- 2. RESIZER HELPER ---
   const resizeImage = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
-          const maxWidth = 1000; // 1000px is perfect for passport size
+          const maxWidth = 1000; // Optimal for speed
           const scale = maxWidth / img.width;
           
-          // Only resize if the image is actually huge
           if (scale < 1) {
              const canvas = document.createElement('canvas');
              canvas.width = maxWidth;
@@ -58,22 +56,24 @@ const BackgroundRemover = () => {
              const ctx = canvas.getContext('2d');
              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
              
-             // Export as Blob (High Speed JPEG)
+             // Export as Blob
              canvas.toBlob((blob) => {
-                resolve(blob);
+                if (blob) resolve(blob);
+                else reject(new Error("Image Resize Failed"));
              }, 'image/jpeg', 0.9);
           } else {
-             resolve(file); // Return original if it's already small
+             resolve(file); 
           }
         };
-        img.onerror = () => reject(new Error("Image load error"));
+        img.onerror = () => reject(new Error("Could not load image"));
         img.src = event.target.result;
       };
+      reader.onerror = () => reject(new Error("Could not read file"));
       reader.readAsDataURL(file);
     });
   };
 
-  // --- Handlers ---
+  // --- HANDLERS ---
 
   const handleImageUpload = (event) => {
     const file = event.target.files[0];
@@ -91,20 +91,24 @@ const BackgroundRemover = () => {
     setLoadingMsg("Optimizing & Removing Background...");
     
     try {
-      // 1. Fetch the file object from the blob URL
+      // 1. Fetch the file object again from the preview URL
       const response = await fetch(imageSrc);
       const fileBlob = await response.blob();
 
-      // 2. Resize it (The "Speed Hack")
+      // 2. Resize it (Critical Speed Step)
       const resizedBlob = await resizeImage(fileBlob);
 
-      // 3. Configure AI for Speed
+      // 3. Configure AI (Robust Settings)
       const config = {
         publicPath: "https://static.img.ly/background-removal-data/1.0.6/",
         model: 'small', // Faster model
+        // Removed 'device: gpu' to prevent crashes on unsupported devices
         output: {
           format: 'image/png',
           quality: 0.8
+        },
+        progress: (push_step, total_step, total_progress) => {
+            setLoadingMsg(`AI Processing... ${Math.round(total_progress * 100)}%`);
         }
       };
 
@@ -114,8 +118,13 @@ const BackgroundRemover = () => {
       setProcessedImage(url);
       setStep(2);
     } catch (e) {
-      console.error(e);
-      alert("Error processing image. Please try a different photo.");
+      console.error("BG REMOVAL ERROR:", e);
+      
+      let errorText = "Error processing image.";
+      if (e.message.includes("fetch")) errorText = "Network Error: Could not download AI models. Please check your internet connection.";
+      if (e.message.includes("memory")) errorText = "Device Memory Full. Please close other tabs and try again.";
+      
+      alert(errorText + "\n\nTip: Try a different photo or refresh the page.");
     } finally {
       setIsLoading(false);
     }
@@ -139,6 +148,7 @@ const BackgroundRemover = () => {
         setStep(3);
     } catch (e) {
         console.error(e);
+        alert("Error creating print sheet");
     } finally {
         setIsLoading(false);
     }
@@ -150,6 +160,7 @@ const BackgroundRemover = () => {
         const ctx = canvas.getContext('2d');
         const img = new Image();
         img.src = imgUrl;
+        img.crossOrigin = "anonymous";
         img.onload = () => {
             canvas.width = img.width;
             canvas.height = img.height;
@@ -171,7 +182,7 @@ const BackgroundRemover = () => {
     }
   }, [pageSize, finalSingle, step]);
 
-  // --- Render UI (Your Original UI) ---
+  // --- Render UI (Your Exact UI Design) ---
 
   return (
     <div style={styles.pageWrapper}>
@@ -184,7 +195,7 @@ const BackgroundRemover = () => {
             <div style={styles.logoIcon}>
                <div style={{width:'60%', height:'60%', background:'#fff', borderRadius:'50%'}}></div>
             </div>
-            <h1 style={styles.logoText}>Passport<span style={{color:'#4facfe'}}>Pro</span> <span style={{fontSize:'12px', color:'#999', fontWeight:'normal'}}>Fast Mode</span></h1>
+            <h1 style={styles.logoText}>Passport<span style={{color:'#4facfe'}}>Pro</span></h1>
           </div>
           <nav style={styles.nav}>
              <a href="#" style={styles.navLink}>Home</a>
@@ -218,7 +229,7 @@ const BackgroundRemover = () => {
             {step === 1 && (
               <div style={styles.stepContainer}>
                  <h2 style={styles.heading}>Create Your Passport Photo</h2>
-                 <p style={styles.subHeading}>Upload an image to start. Processing is optimized for speed.</p>
+                 <p style={styles.subHeading}>Upload an image. Processing is optimized for speed.</p>
                  
                  {!imageSrc ? (
                    <div style={styles.uploadArea}>
