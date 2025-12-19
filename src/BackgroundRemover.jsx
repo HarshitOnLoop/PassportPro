@@ -5,14 +5,12 @@ import { getCroppedImg } from './cropUtils';
 import { generatePrintSheet, getPageSizes } from './printUtils';
 
 const BackgroundRemover = () => {
-  // States
   const [imageSrc, setImageSrc] = useState(null);
   const [processedImage, setProcessedImage] = useState(null);
   const [printSheet, setPrintSheet] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   
-  // Workflow
   const [step, setStep] = useState(1); 
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -23,25 +21,28 @@ const BackgroundRemover = () => {
   
   const PAGE_OPTIONS = getPageSizes();
 
-  // ⚡ SPEED HACK 1: Preload the "Small" Model immediately
+  // 1. PRELOAD (Safe Mode)
+  // removed 'gpu' force to prevent crashes
   useEffect(() => {
-    preload({
-      publicPath: "https://static.img.ly/background-removal-data/1.0.6/",
-      model: 'small' // Forces the lightweight model
-    });
+    try {
+      preload({
+        publicPath: "https://static.img.ly/background-removal-data/latest/",
+        model: 'small'
+      });
+      console.log("AI Models Preloaded");
+    } catch (e) {
+      console.warn("Preload warning:", e);
+    }
   }, []);
 
-  // ⚡ SPEED HACK 2: The Resizer
-  // Shrinks huge images to 1000px width max.
-  // This makes the AI work 10x faster.
+  // 2. RESIZER (Robust)
   const resizeImage = (file) => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
-          // Passport photos don't need 4K resolution. 1000px is plenty.
-          const maxWidth = 1000;
+          const maxWidth = 1000; // Optimal speed/quality balance
           const scale = maxWidth / img.width;
           
           if (scale < 1) {
@@ -52,65 +53,71 @@ const BackgroundRemover = () => {
              const ctx = canvas.getContext('2d');
              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
              
-             // Convert to low-quality JPEG for speed (AI doesn't care about compression)
+             // Export as Blob
              canvas.toBlob((blob) => {
-                resolve(blob); 
-             }, 'image/jpeg', 0.8);
+                if (blob) resolve(blob);
+                else reject(new Error("Canvas to Blob failed"));
+             }, 'image/jpeg', 0.9);
           } else {
-             resolve(file); // Image is already small
+             resolve(file); // Return original if small enough
           }
         };
+        img.onerror = (e) => reject(new Error("Image load failed"));
         img.src = event.target.result;
       };
+      reader.onerror = (e) => reject(new Error("File read failed"));
       reader.readAsDataURL(file);
     });
   };
 
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
-    if (file) {
-      // 1. Show raw image immediately so user sees something happening
-      const rawUrl = URL.createObjectURL(file);
-      setImageSrc(rawUrl);
-      setStep(1); 
-      setProcessedImage(null); setPrintSheet(null);
-      setRotation(0); setZoom(1); setBgColor('#ffffff');
+    if (!file) return;
 
-      // 2. Resize and Start AI in Background
-      setIsLoading(true);
-      setLoadingMsg("Optimizing & Removing Background...");
+    // Show preview immediately
+    const rawUrl = URL.createObjectURL(file);
+    setImageSrc(rawUrl);
+    setStep(1); 
+    setProcessedImage(null); 
+    setPrintSheet(null);
+    setRotation(0); setZoom(1); setBgColor('#ffffff');
 
-      // Resize first
+    setIsLoading(true);
+    setLoadingMsg("Optimizing & Removing Background...");
+
+    try {
+      // A. Resize Image
       const resizedBlob = await resizeImage(file);
-      const resizedUrl = URL.createObjectURL(resizedBlob);
 
-      // 3. Run AI on the SMALL image
-      try {
-        const blob = await removeBackground(resizedUrl, {
-            publicPath: "https://static.img.ly/background-removal-data/1.0.6/",
-            model: 'small', // Use fast model
-            device: 'gpu',  // Use GPU
-            output: {
-                format: 'image/png',
-                quality: 0.8
-            }
-        });
-        
-        const processedUrl = URL.createObjectURL(blob);
-        setProcessedImage(processedUrl);
-        
-        // Auto-advance to editor once done
-        setStep(2);
-      } catch (e) {
-        console.error(e);
-        alert("Error processing image");
-      } finally {
-        setIsLoading(false);
-      }
+      // B. Config
+      const config = {
+        publicPath: "https://static.img.ly/background-removal-data/latest/", 
+        model: 'small', // Fast model
+        // Removed 'device: gpu' - Let the library auto-detect (Prevents crashes)
+        output: {
+            format: 'image/png',
+            quality: 0.8
+        }
+      };
+
+      // C. Remove Background (Pass BLOB directly, not URL)
+      // Passing the Blob directly is much safer than a blob:URL
+      const blob = await removeBackground(resizedBlob, config);
+      
+      const processedUrl = URL.createObjectURL(blob);
+      setProcessedImage(processedUrl);
+      
+      setStep(2); // Auto-advance
+
+    } catch (e) {
+      console.error("FULL ERROR DETAILS:", e); // Check Console (F12) if this happens!
+      alert(`Error: ${e.message || "Could not remove background"}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // --- Printing Logic (Same as before) ---
+  // --- Printing Utils (Standard) ---
   const onCropComplete = (croppedArea, croppedAreaPixels) => {
     setCroppedAreaPixels(croppedAreaPixels);
   };
@@ -144,34 +151,27 @@ const BackgroundRemover = () => {
         setStep(3);
     } catch (e) {
         console.error(e);
+        alert("Error generating print sheet");
     } finally {
         setIsLoading(false);
     }
   };
 
-  // Re-generate sheet when page size changes
-  useEffect(() => {
-    if (step === 3 && printSheet) { // only if we already generated once
-        // We need the single photo again to regenerate. 
-        // NOTE: In a real app, store 'singlePhoto' in state to avoid re-flattening.
-        // For simplicity, we just keep current sheet or user clicks back.
-    }
-  }, [pageSize]);
-
-
-  // --- Render (Simplified UI for Speed) ---
+  // --- Render ---
   return (
     <div style={styles.pageWrapper}>
       <header style={styles.header}>
         <div style={styles.container}>
-          <h1 style={styles.logoText}>Passport<span style={{color:'#4facfe'}}>Pro</span> <span style={{fontSize:'12px', color:'#999'}}>Fast Mode</span></h1>
+          <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+             <div style={{width:'30px', height:'30px', background:'#4facfe', borderRadius:'6px'}}></div>
+             <h1 style={styles.logoText}>Passport<span style={{color:'#4facfe'}}>Pro</span></h1>
+          </div>
         </div>
       </header>
 
       <main style={styles.main}>
         <div style={styles.card}>
             
-            {/* Loader */}
             {isLoading && (
               <div style={styles.loaderOverlay}>
                  <div style={styles.spinner}></div>
@@ -182,8 +182,8 @@ const BackgroundRemover = () => {
             {/* STEP 1: Upload */}
             {step === 1 && (
               <div style={styles.stepContainer}>
-                 <h2 style={styles.heading}>Fast Passport Photo</h2>
-                 <p style={styles.subHeading}>Processing optimized for speed.</p>
+                 <h2 style={styles.heading}>Passport Photo Maker</h2>
+                 <p style={styles.subHeading}>Upload a photo to start.</p>
                  <div style={styles.uploadArea}>
                     <input type="file" id="fileInput" onChange={handleImageUpload} accept="image/*" style={{display:'none'}} />
                     <label htmlFor="fileInput" style={styles.uploadButton}>Select Photo</label>
@@ -232,7 +232,9 @@ const BackgroundRemover = () => {
                   </div>
                   <img src={printSheet} alt="Sheet" style={styles.sheetImg} />
                   <br/>
-                  <a href={printSheet} download={`passport-${pageSize}.jpg`}><button style={styles.btnPrimary}>Download</button></a>
+                  <div style={{display:'flex', gap:'10px', justifyContent:'center'}}>
+                      <a href={printSheet} download={`passport-${pageSize}.jpg`}><button style={styles.btnPrimary}>Download</button></a>
+                  </div>
                   <button onClick={()=>setStep(2)} style={styles.linkButton}>&larr; Back</button>
                </div>
             )}
@@ -242,9 +244,8 @@ const BackgroundRemover = () => {
   );
 };
 
-// --- Styles (Same as before) ---
 const styles = {
-  pageWrapper: { fontFamily: "sans-serif", backgroundColor: '#f4f7f6', minHeight: '100vh', display: 'flex', flexDirection: 'column' },
+  pageWrapper: { fontFamily: "'Inter', sans-serif", backgroundColor: '#f4f7f6', minHeight: '100vh', display: 'flex', flexDirection: 'column' },
   header: { backgroundColor: '#fff', height: '60px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #eee' },
   container: { maxWidth: '1000px', margin: '0 auto', width: '100%', padding: '0 20px' },
   logoText: { fontSize: '20px', fontWeight: 'bold', color: '#333' },
@@ -274,6 +275,7 @@ const styles = {
   loaderText: { marginTop: '10px', fontWeight: '600' }
 };
 
+// Global Animation
 const styleSheet = document.createElement("style");
 styleSheet.innerText = `@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`;
 document.head.appendChild(styleSheet);
